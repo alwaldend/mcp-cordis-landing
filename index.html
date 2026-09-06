@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+  <head>
+	<meta name="generator" content="Hugo 0.165.0">
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MCP Cordis</title>
+    
+    <meta name="description" content="Workspace-local runtime packages behind a stable MCP server" />
+     
+    <meta name="github-repo" content="https://github.com/alwaldend/src" />
+      
+    <link rel="stylesheet" href="/scss/landing.min.757a78e91e368eeac2f0cb4833153359a2f027c8e1ec3cf51681f3f623b018da.css" />
+     
+  </head>
+  <body>
+    <header class="landing-topbar">
+      <a class="landing-brand" href="/">Mcp Cordis</a>
+      <nav class="landing-nav" aria-label="Project links">
+        
+        <a href="https://alwaldend.com/docs/projects/mcp_cordis/">Docs</a>
+        
+        <a href="https://github.com/alwaldend/src">Github</a>
+        
+      </nav>
+    </header>
+    <main class="landing-container">
+      <div class="landing-header">
+        <h1>MCP Cordis</h1>
+        <div class="btn-group" role="group" aria-label="Project links">
+          
+          <a class="btn btn-outline-primary" href="https://alwaldend.com/docs/projects/mcp_cordis/">Docs</a>
+          
+          <a class="btn btn-outline-primary" href="https://github.com/alwaldend/src">Github</a>
+          
+        </div>
+      </div>
+      
+      <p class="landing-description">Workspace-local runtime packages behind a stable MCP server</p>
+       
+      <div class="landing-readme"><p><code>mcp_cordis</code> is a standalone stdio MCP server that mounts runtime JavaScript
+packages through <a
+  href="https://github.com/deepseek-ai/deepseek-harness"
+  
+  >Cordis</a
+>
+.
+It is intentionally an MCP server, not a Codex plugin bundle.</p>
+<p>Reusable definitions are ordinary ESM files in
+<code>projects/mcp_cordis/plugins</code>, listed by <code>projects/mcp_cordis/cordis.yaml</code>.
+Disposable definitions use the same layout under
+<code>out/&lt;task&gt;/mcp_cordis/runs/&lt;run&gt;/</code>. Each run writes a bounded manifest with
+explicit task, run, worker, information, budget, retention, lock, and cleanup
+fields. <code>AGENT_TASK_ID</code>, <code>AGENT_RUN_ID</code>, and <code>AGENT_WORKER_ID</code> may provide
+stable identities; the launcher otherwise creates process-scoped identities.
+Every
+package is addressed by both scope and name, so a scratch package never
+silently shadows a reusable package.</p>
+<h2 id="run">Run</h2>
+<p>The repository&rsquo;s <code>.codex/config.toml</code> registers <code>mcp_cordis</code> as a
+project-scoped stdio server. Codex loads that file for a trusted workspace and
+finds the active Git worktree before starting the server. Separate clones and
+worktrees therefore use their own source, <code>projects/mcp_cordis</code> packages, and
+task/run-namespaced scratch packages. Trusting the repository&rsquo;s root checkout
+also covers its linked worktrees; a glob trust entry is neither needed nor
+supported. A new Codex session is needed after the MCP registration itself is
+first added; package changes after that do not require another session.</p>
+<p>The registration calls <code>cmd/mcp_cordis/launch.sh</code>. With a current installed
+<code>bazel_agent</code>, the launcher selects a content-addressed runtime from the
+per-user tool cache and executes it directly. The first exact source version
+is built and atomically installed under a per-key lock; subsequent worktrees
+with the same inputs do not start Bazel or load a configured graph. An older
+runner falls back to asking Bazel for a launch script under the task&rsquo;s ignored
+<code>out</code> directory. Either path releases Bazel&rsquo;s output-base lock before the
+long-lived stdio server starts, so builds and tests can run normally while
+Codex remains connected.</p>
+<p>The cached artifact contains the stable server runtime and pinned JavaScript
+dependencies, but not <code>cordis.yaml</code> or reusable plugins. It always reads those
+from the explicit active workspace, so editing a package changes live behavior
+without repackaging the runtime or selecting a new cache key.</p>
+<p>The same project configuration starts an optional asynchronous <code>SessionStart</code>
+hook that starts the worktree&rsquo;s Bazel server and warms <code>repo_delivery</code>. It
+produces no session context, ignores failure, and never queries the whole
+workspace graph. Cordis itself is already warmed by its MCP launch path, so the
+hook does not start a duplicate Cordis build.</p>
+<p>To build and run the server directly from the repository root:</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-sh" data-lang="sh"><span style="display:flex;"><span>bazel_agent bazel run //projects/mcp_cordis:mcp_cordis -- <span style="color:#ae81ff">\
+</span></span></span><span style="display:flex;"><span>  --workspace-root <span style="color:#e6db74">&#34;</span>$PWD<span style="color:#e6db74">&#34;</span> <span style="color:#ae81ff">\
+</span></span></span><span style="display:flex;"><span>  --task-id example-task <span style="color:#ae81ff">\
+</span></span></span><span style="display:flex;"><span>  --run-id example-run
+</span></span></code></pre></div><p>The workspace root is mandatory unless <code>BUILD_WORKSPACE_DIRECTORY</code> is
+present. The checked-in launcher resolves the current Git worktree explicitly
+and supplies that path to the server.</p>
+<p>The fixed <code>cordis_*</code> tools define, start, inspect, invoke, update, stop,
+remove, and promote packages without reconnecting the MCP client. Package
+handlers are called through <code>cordis_invoke</code>; this remains reliable even when
+an MCP client caches its initial tool list.</p>
+<h2 id="cordis-configuration-and-plugin-format">Cordis configuration and plugin format</h2>
+<p><code>cordis.yaml</code> uses the standard Cordis Include entry-list format:</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-yaml" data-lang="yaml"><span style="display:flex;"><span>- <span style="color:#f92672">id</span>: <span style="color:#ae81ff">hello</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#f92672">name</span>: <span style="color:#ae81ff">./plugins/hello.mjs</span>
+</span></span></code></pre></div><p>The referenced file is a normal ESM Cordis plugin:</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-js" data-lang="js"><span style="display:flex;"><span><span style="color:#66d9ef">const</span> <span style="color:#a6e22e">plugin</span> <span style="color:#f92672">=</span> {
+</span></span><span style="display:flex;"><span>  <span style="color:#a6e22e">description</span><span style="color:#f92672">:</span> <span style="color:#e6db74">&#34;Provide a greeting.&#34;</span>,
+</span></span><span style="display:flex;"><span>  <span style="color:#a6e22e">apply</span>(<span style="color:#a6e22e">ctx</span>) {
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">ctx</span>.<span style="color:#a6e22e">tool</span>(
+</span></span><span style="display:flex;"><span>      {
+</span></span><span style="display:flex;"><span>        <span style="color:#a6e22e">name</span><span style="color:#f92672">:</span> <span style="color:#e6db74">&#34;hello_world&#34;</span>,
+</span></span><span style="display:flex;"><span>        <span style="color:#a6e22e">description</span><span style="color:#f92672">:</span> <span style="color:#e6db74">&#34;Return a greeting.&#34;</span>,
+</span></span><span style="display:flex;"><span>        <span style="color:#a6e22e">inputSchema</span><span style="color:#f92672">:</span> {
+</span></span><span style="display:flex;"><span>          <span style="color:#a6e22e">type</span><span style="color:#f92672">:</span> <span style="color:#e6db74">&#34;object&#34;</span>,
+</span></span><span style="display:flex;"><span>          <span style="color:#a6e22e">properties</span><span style="color:#f92672">:</span> { <span style="color:#a6e22e">name</span><span style="color:#f92672">:</span> { <span style="color:#a6e22e">type</span><span style="color:#f92672">:</span> <span style="color:#e6db74">&#34;string&#34;</span> } },
+</span></span><span style="display:flex;"><span>          <span style="color:#a6e22e">additionalProperties</span><span style="color:#f92672">:</span> <span style="color:#66d9ef">false</span>,
+</span></span><span style="display:flex;"><span>        },
+</span></span><span style="display:flex;"><span>      },
+</span></span><span style="display:flex;"><span>      ({ <span style="color:#a6e22e">name</span> <span style="color:#f92672">=</span> <span style="color:#e6db74">&#34;world&#34;</span> }) =&gt; ({ <span style="color:#a6e22e">greeting</span><span style="color:#f92672">:</span> <span style="color:#e6db74">`Hello, </span><span style="color:#e6db74">${</span><span style="color:#a6e22e">name</span><span style="color:#e6db74">}</span><span style="color:#e6db74">!`</span> }),
+</span></span><span style="display:flex;"><span>    );
+</span></span><span style="display:flex;"><span>  },
+</span></span><span style="display:flex;"><span>};
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">plugin</span>.<span style="color:#a6e22e">apply</span>.<span style="color:#a6e22e">description</span> <span style="color:#f92672">=</span> <span style="color:#a6e22e">plugin</span>.<span style="color:#a6e22e">description</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#66d9ef">export</span> <span style="color:#66d9ef">default</span> <span style="color:#a6e22e">plugin</span>;
+</span></span></code></pre></div><p>Cordis normalizes an object plugin to its <code>apply</code> callback. Attaching the
+optional package description to that callback exposes it through
+<code>cordis_list</code> and <code>cordis_inspect</code>; tool descriptions remain part of each
+<code>ctx.tool()</code> definition.</p>
+<p>The server mounts the official Cordis Loader, Include, and HMR services.
+<code>cordis_define</code> syntax-checks and atomically persists the ordinary module.
+Creating or enabling an entry refreshes any cached module through Cordis HMR,
+then uses the public Include refresh API and waits for activation. Updating an
+already-running entry returns <code>activation: &quot;pending&quot;</code>; poll <code>cordis_invoke</code> or
+<code>cordis_list_tools</code> until the new behavior is visible.
+The reproducibly pinned HMR package carries a focused pnpm patch that
+serializes module reloads and drains source changes arriving during an
+in-flight reload, so the latest persisted source is not lost.</p>
+<p>Syntax errors are rejected before the file changes. Evaluation and <code>apply()</code>
+failures follow native Cordis HMR behavior; the wrapper does not add a second
+activation transaction around them. It also does not inject source markers,
+inspect Loader caches, correlate watcher events, or maintain its own source
+rollback/version store. Reusable history is normal Git history. Manual edits
+to watched plugin files are also picked up by Cordis HMR.</p>
+<p>Runtime modules use normal Cordis semantics, including static imports,
+top-level <code>await</code>, and asynchronous <code>apply(ctx, config)</code>. Package code is
+trusted: a never-settling module evaluation or activation can therefore stall
+Cordis lifecycle work. The stdio launcher reserves its protocol stream and
+redirects package stdout to stderr, keeping accidental <code>console.log()</code> calls
+off the JSON-RPC wire.</p>
+<p>The package context exposes <code>ctx.workspaceRoot</code>, <code>ctx.resolveWorkspace()</code>,
+<code>ctx.readText()</code>, and structured <code>ctx.exec()</code> in addition to <code>ctx.tool()</code>.
+<code>ctx.exec()</code> returns <code>code</code>, <code>signal</code>, <code>stdout</code>, <code>stderr</code>, <code>truncated</code>, and
+<code>outputLimitExceeded</code>; <code>maxBytes</code> is a combined stdout/stderr budget. By
+default, exceeding that budget or producing invalid UTF-8 rejects with
+<code>EXEC_OUTPUT_LIMIT</code> or <code>EXEC_INVALID_UTF8</code>. Packages that explicitly set
+<code>allowTruncatedOutput: true</code> instead receive the valid retained prefix with
+<code>truncated</code> set; <code>outputLimitExceeded</code> distinguishes the byte cap from UTF-8
+loss. A Fiber-owned supervisor admits each launch atomically, and results
+settle only after the direct child and every live member of its original Linux
+process group have stopped. Limits, timeouts, and plugin disposal use the same
+cleanup path. A process that deliberately creates a new session escapes that
+group and is outside this trusted-package contract. <code>ctx.exec()</code> therefore
+fails closed with <code>EXEC_UNSUPPORTED_PLATFORM</code> away from Linux. Package code
+also has normal Node built-ins; this host is a reliability boundary, not a
+security sandbox.</p>
+<p><code>cordis_invoke.timeout_ms</code> bounds how long the gateway waits for a result; it
+does not cancel an already admitted JavaScript handler. The handler keeps its
+Fiber lease until it finishes, so stop, remove, and shutdown wait for it.
+Cordis HMR waits for a retired Fiber to finish draining before it activates
+and publishes the replacement, so a live invocation can delay a reload. Any
+<code>ctx.exec()</code> launched by a timed-out invocation is cancelled and its process
+group is confirmed stopped before the timeout response settles.</p>
+<h2 id="included-packages">Included packages</h2>
+<ul>
+<li><code>repo_context</code>: bounded repository reads and searches.</li>
+<li><code>git_worktree</code>: read-only branch, status, log, and comparison snapshots.</li>
+<li><code>network_probe</code>: DNS, TCP/TLS, and HTTP diagnostics.</li>
+</ul>
+<p>These were selected from aggregate recurring task categories in recent local
+sessions. No transcript content, credentials, or private outputs are included.</p>
+<h2 id="durable-goal">Durable goal</h2>
+<p>Future runtime-extension work should resume from the maintained
+<a
+  href="https://github.com/alwaldend/src/blob/master/projects/mcp_cordis/goals/runtime_extensions"
+  
+  >runtime extensions goal</a
+>
+, which records acceptance
+criteria, decisions, failed attempts, and supporting evidence.</p>
+<h2 id="dependency-notices">Dependency notices</h2>
+<p>The runtime directly uses <code>@deepseek-ai/cordis</code>, its official Loader, Include,
+HMR, and Timer plugins, and the Model Context Protocol TypeScript SDK. Their
+license texts are retained in the resolved package artifacts by the pinned
+pnpm/Bazel dependency graph.</p>
+</div>
+    </main>
+    <footer class="landing-footer">
+      <p>Generated from the project README.</p>
+    </footer>
+  </body>
+</html>
